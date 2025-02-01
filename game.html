@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <!-- Meta для поддержки безопасных зон и корректного масштабирования -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Arcade Game: Asteroid Field</title>
+  <style>
+    /* Стили (оставляем ваш текущий стиль, включая оптимизации, анимации, позиционирование и т.д.) */
+    /* ... (ваш CSS-код, который вы использовали ранее) ... */
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <!-- Панель UI -->
+    <div id="ui">
+      <div id="score">Счет: 0</div>
+      <div id="lives"></div>
+    </div>
+    <!-- Пламя двигателя с вложенным элементом для анимации -->
+    <div id="flame"><div class="flameInner"></div></div>
+    <!-- Корабль -->
+    <img id="spaceship" src="https://nikart777.github.io/medprogramcenter/ship.png" alt="Корабль">
+    <!-- Экран Game Over -->
+    <div id="gameOverScreen">
+      <h1>Игра окончена</h1>
+      <div id="finalScore">Счет: 0</div>
+      <button id="restartButton">Начать заново</button>
+    </div>
+    <!-- Мобильное управление -->
+    <div id="joystickContainer">
+      <div id="joystickBase"></div>
+      <div id="joystickKnob"></div>
+    </div>
+    <div id="mobileButtons">
+      <button id="shootButton">Стрельба</button>
+      <button id="hyperspaceButton"></button>
+    </div>
+  </div>
+  <script>
+    // Дополнительные настройки (например, noseOffsetAdjustment, tailOffsetAdjustment)
+    const noseOffsetAdjustment = 0;
+    const tailOffsetAdjustment = 5;
+    
+    // Определяем, мобильное ли устройство
+    const isMobile = 'ontouchstart' in window;
+    
+    // Основные переменные и получение DOM-элементов
+    const gameContainer = document.getElementById('gameContainer');
+    const spaceshipEl = document.getElementById('spaceship');
+    const flameEl = document.getElementById('flame');
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const finalScoreEl = document.getElementById('finalScore');
+    const restartButton = document.getElementById('restartButton');
+    
+    let gameWidth = window.innerWidth;
+    let gameHeight = window.innerHeight;
+    
+    let score = 0;
+    let lives = 3;
+    let gameOver = false;
+    let lastLaserTime = 0;
+    const laserCooldown = 500;
+    let lastHyperspaceTime = 0;
+    const hyperspaceCooldown = 3000;
+    
+    // Объект для отслеживания клавиш (ПК)
+    const keys = {};
+    
+    // Параметры корабля
+    const spaceship = {
+      x: gameWidth / 2,
+      y: gameHeight / 2,
+      vx: 0,
+      vy: 0,
+      angle: 0, // 0 = вверх
+      width: 50,
+      height: 50,
+      thrust: 0.0003125,
+      rotationSpeed: 0.003,
+      friction: 0.99
+    };
+    
+    let lasers = [];
+    let asteroids = [];
+    let fragments = [];
+    let stars = [];
+    
+    let asteroidSpawnInterval = 2000;
+    let lastAsteroidSpawn = 0;
+    
+    function updateLives() {
+      livesEl.innerHTML = '';
+      for (let i = 0; i < lives; i++) {
+        const lifeIcon = document.createElement('div');
+        lifeIcon.className = 'life';
+        livesEl.appendChild(lifeIcon);
+      }
+    }
+    
+    function createStarfield() {
+      for (let layer = 0; layer < 3; layer++) {
+        let starCount = 30 + layer * 20;
+        for (let i = 0; i < starCount; i++) {
+          const star = document.createElement('div');
+          star.className = 'star';
+          const size = Math.random() * (2 + layer) + 1;
+          star.style.width = size + 'px';
+          star.style.height = size + 'px';
+          star.style.top = Math.random() * gameHeight + 'px';
+          star.style.left = Math.random() * gameWidth + 'px';
+          star.dataset.speed = (layer + 1) * 0.2;
+          gameContainer.appendChild(star);
+          stars.push(star);
+        }
+      }
+    }
+    
+    function updateStars(delta) {
+      stars.forEach(star => {
+        let speed = parseFloat(star.dataset.speed);
+        let top = parseFloat(star.style.top);
+        top += speed * delta * 0.05;
+        if (top > gameHeight) {
+          top = 0;
+          star.style.left = Math.random() * gameWidth + 'px';
+        }
+        star.style.top = top + 'px';
+      });
+    }
+    
+    function createAsteroid(x = null, y = null, size = null) {
+      const asteroid = document.createElement('div');
+      asteroid.className = 'asteroid';
+      size = size || (20 + Math.random() * 30);
+      asteroid.style.width = size + 'px';
+      asteroid.style.height = size + 'px';
+      if (x === null || y === null) {
+        const edge = Math.floor(Math.random() * 4);
+        switch (edge) {
+          case 0: x = Math.random() * gameWidth; y = -size; break;
+          case 1: x = gameWidth + size; y = Math.random() * gameHeight; break;
+          case 2: x = Math.random() * gameWidth; y = gameHeight + size; break;
+          case 3: x = -size; y = Math.random() * gameHeight; break;
+        }
+      }
+      asteroid.dataset.posX = x;
+      asteroid.dataset.posY = y;
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.05 + Math.random() * 0.15;
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed;
+      const rotationSpeed = (Math.random() - 0.5) * 2;
+      asteroid.dataset.vx = vx;
+      asteroid.dataset.vy = vy;
+      asteroid.dataset.size = size;
+      asteroid.dataset.rotation = 0;
+      asteroid.dataset.rotationSpeed = rotationSpeed;
+      asteroid.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(0deg)`;
+      gameContainer.appendChild(asteroid);
+      asteroids.push(asteroid);
+    }
+    
+    function createFragment(x, y, size) {
+      const fragment = document.createElement('div');
+      fragment.className = 'fragment';
+      size = size * 0.5;
+      fragment.style.width = size + 'px';
+      fragment.style.height = size + 'px';
+      fragment.dataset.posX = x;
+      fragment.dataset.posY = y;
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.1 + Math.random() * 0.2;
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed;
+      fragment.dataset.vx = vx;
+      fragment.dataset.vy = vy;
+      fragment.dataset.size = size;
+      fragment.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      gameContainer.appendChild(fragment);
+      fragments.push(fragment);
+    }
+    
+    // Создание лазера: вычисляем центр корабля, а затем точку "носа"
+    function createLaser() {
+      const laser = document.createElement('div');
+      laser.className = 'laser';
+      const centerX = spaceship.x + spaceship.width / 2;
+      const centerY = spaceship.y + spaceship.height / 2;
+      const tipX = centerX + (spaceship.height / 2 + noseOffsetAdjustment) * Math.sin(spaceship.angle);
+      const tipY = centerY - (spaceship.height / 2 + noseOffsetAdjustment) * Math.cos(spaceship.angle);
+      laser.dataset.posX = tipX;
+      laser.dataset.posY = tipY;
+      const angleDeg = spaceship.angle * 180 / Math.PI;
+      laser.dataset.angle = angleDeg;
+      const laserSpeed = 0.5;
+      laser.dataset.vx = Math.sin(spaceship.angle) * laserSpeed;
+      laser.dataset.vy = -Math.cos(spaceship.angle) * laserSpeed;
+      laser.style.transform = `translate3d(${tipX}px, ${tipY}px, 0) rotate(${angleDeg}deg)`;
+      gameContainer.appendChild(laser);
+      lasers.push(laser);
+    }
+    
+    function isColliding(el1, el2) {
+      const rect1 = el1.getBoundingClientRect();
+      const rect2 = el2.getBoundingClientRect();
+      return !(rect1.right < rect2.left ||
+               rect1.left > rect2.right ||
+               rect1.bottom < rect2.top ||
+               rect1.top > rect2.bottom);
+    }
+    
+    function updateSpaceship(delta) {
+      let thrusting = false;
+      if (!isMobile) {
+        if (keys['ArrowLeft'] || keys['KeyA']) {
+          spaceship.angle -= spaceship.rotationSpeed * delta;
+        }
+        if (keys['ArrowRight'] || keys['KeyD']) {
+          spaceship.angle += spaceship.rotationSpeed * delta;
+        }
+        if (keys['ArrowUp'] || keys['KeyW']) {
+          spaceship.vx += Math.sin(spaceship.angle) * spaceship.thrust * delta;
+          spaceship.vy -= Math.cos(spaceship.angle) * spaceship.thrust * delta;
+          thrusting = true;
+        }
+        if (keys['ArrowDown'] || keys['KeyS']) {
+          spaceship.vx -= Math.sin(spaceship.angle) * spaceship.thrust * delta * 0.5;
+          spaceship.vy += Math.cos(spaceship.angle) * spaceship.thrust * delta * 0.5;
+        }
+      } else {
+        if (joystickActive) {
+          const mag = Math.sqrt(joystickVector.x ** 2 + joystickVector.y ** 2);
+          if (mag > 0.1) {
+            spaceship.angle = Math.atan2(joystickVector.y, joystickVector.x) - Math.PI / 2;
+            thrusting = true;
+            spaceship.vx += Math.sin(spaceship.angle) * spaceship.thrust * mag * delta;
+            spaceship.vy -= Math.cos(spaceship.angle) * spaceship.thrust * mag * delta;
+          }
+        }
+      }
+      spaceship.vx *= spaceship.friction;
+      spaceship.vy *= spaceship.friction;
+      spaceship.x += spaceship.vx * delta;
+      spaceship.y += spaceship.vy * delta;
+      if (spaceship.x < 0) spaceship.x = 0;
+      if (spaceship.y < 0) spaceship.y = 0;
+      if (spaceship.x > gameWidth - spaceship.width) spaceship.x = gameWidth - spaceship.width;
+      if (spaceship.y > gameHeight - spaceship.height) spaceship.y = gameHeight - spaceship.height;
+      
+      // Обновляем позицию корабля через translate3d + поворот
+      spaceshipEl.style.transform = `translate3d(${spaceship.x}px, ${spaceship.y}px, 0) rotate(${spaceship.angle * 180/Math.PI}deg)`;
+      
+      // Пламя двигателя – позиционирование хвоста корабля
+      const centerX = spaceship.x + spaceship.width / 2;
+      const centerY = spaceship.y + spaceship.height / 2;
+      const d = spaceship.height / 2 + tailOffsetAdjustment;
+      const tailX = centerX - d * Math.sin(spaceship.angle);
+      const tailY = centerY + d * Math.cos(spaceship.angle);
+      const flameWidth = 10;
+      const flamePosX = tailX - flameWidth / 2;
+      const flamePosY = tailY;
+      flameEl.style.transform = `translate3d(${flamePosX}px, ${flamePosY}px, 0)`;
+      flameEl.style.opacity = thrusting ? 1 : 0;
+    }
+    
+    function updateLasers(delta) {
+      for (let i = lasers.length - 1; i >= 0; i--) {
+        const laser = lasers[i];
+        let x = parseFloat(laser.dataset.posX);
+        let y = parseFloat(laser.dataset.posY);
+        const vx = parseFloat(laser.dataset.vx);
+        const vy = parseFloat(laser.dataset.vy);
+        x += vx * delta;
+        y += vy * delta;
+        laser.dataset.posX = x;
+        laser.dataset.posY = y;
+        const angleDeg = laser.dataset.angle;
+        laser.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(${angleDeg}deg)`;
+        if (x < -20 || x > gameWidth + 20 || y < -20 || y > gameHeight + 20) {
+          laser.remove();
+          lasers.splice(i, 1);
+        }
+      }
+    }
+    
+    function updateAsteroids(delta) {
+      for (let i = asteroids.length - 1; i >= 0; i--) {
+        const asteroid = asteroids[i];
+        let x = parseFloat(asteroid.dataset.posX);
+        let y = parseFloat(asteroid.dataset.posY);
+        const vx = parseFloat(asteroid.dataset.vx);
+        const vy = parseFloat(asteroid.dataset.vy);
+        x += vx * delta;
+        y += vy * delta;
+        asteroid.dataset.posX = x;
+        asteroid.dataset.posY = y;
+        let rotation = parseFloat(asteroid.dataset.rotation);
+        const rotationSpeed = parseFloat(asteroid.dataset.rotationSpeed);
+        rotation += rotationSpeed * delta;
+        asteroid.dataset.rotation = rotation;
+        asteroid.style.transform = `translate3d(${x}px, ${y}px, 0) rotate(${rotation}deg)`;
+        if (x < -50 || x > gameWidth + 50 || y < -50 || y > gameHeight + 50) {
+          asteroid.remove();
+          asteroids.splice(i, 1);
+        }
+      }
+    }
+    
+    function updateFragments(delta) {
+      for (let i = fragments.length - 1; i >= 0; i--) {
+        const fragment = fragments[i];
+        let x = parseFloat(fragment.dataset.posX);
+        let y = parseFloat(fragment.dataset.posY);
+        const vx = parseFloat(fragment.dataset.vx);
+        const vy = parseFloat(fragment.dataset.vy);
+        x += vx * delta;
+        y += vy * delta;
+        fragment.dataset.posX = x;
+        fragment.dataset.posY = y;
+        fragment.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+        if (x < -20 || x > gameWidth + 20 || y < -20 || y > gameHeight + 20) {
+          fragment.remove();
+          fragments.splice(i, 1);
+        }
+      }
+    }
+    
+    function handleLaserCollisions() {
+      for (let i = lasers.length - 1; i >= 0; i--) {
+        const laser = lasers[i];
+        let hit = false;
+        for (let j = asteroids.length - 1; j >= 0; j--) {
+          const asteroid = asteroids[j];
+          if (isColliding(laser, asteroid)) {
+            hit = true;
+            laser.remove();
+            lasers.splice(i, 1);
+            const x = parseFloat(asteroid.dataset.posX);
+            const y = parseFloat(asteroid.dataset.posY);
+            const size = parseFloat(asteroid.dataset.size);
+            asteroid.remove();
+            asteroids.splice(j, 1);
+            score += Math.floor(size);
+            if (size > 25) {
+              createFragment(x, y, size);
+              createFragment(x, y, size);
+            }
+            break;
+          }
+        }
+        if (hit) continue;
+        for (let j = fragments.length - 1; j >= 0; j--) {
+          const fragment = fragments[j];
+          if (isColliding(laser, fragment)) {
+            hit = true;
+            laser.remove();
+            lasers.splice(i, 1);
+            fragment.remove();
+            fragments.splice(j, 1);
+            score += 5;
+            break;
+          }
+        }
+      }
+    }
+    
+    function handleShipCollisions() {
+      for (let i = asteroids.length - 1; i >= 0; i--) {
+        const asteroid = asteroids[i];
+        if (isColliding(spaceshipEl, asteroid)) {
+          asteroid.remove();
+          asteroids.splice(i, 1);
+          lives--;
+          updateLives();
+          if (lives <= 0) {
+            endGame();
+          }
+        }
+      }
+      for (let i = fragments.length - 1; i >= 0; i--) {
+        const fragment = fragments[i];
+        if (isColliding(spaceshipEl, fragment)) {
+          fragment.remove();
+          fragments.splice(i, 1);
+          lives--;
+          updateLives();
+          if (lives <= 0) {
+            endGame();
+          }
+        }
+      }
+    }
+    
+    function activateHyperspace() {
+      const now = performance.now();
+      if (now - lastHyperspaceTime < hyperspaceCooldown) return;
+      lastHyperspaceTime = now;
+      const newX = Math.random() * (gameWidth - spaceship.width);
+      const newY = Math.random() * (gameHeight - spaceship.height);
+      spaceship.x = newX;
+      spaceship.y = newY;
+      spaceshipEl.style.transform = `translate3d(${spaceship.x}px, ${spaceship.y}px, 0) rotate(${spaceship.angle * 180/Math.PI}deg)`;
+      asteroids.forEach(asteroid => {
+        if (isColliding(spaceshipEl, asteroid)) {
+          lives--;
+          updateLives();
+          if (lives <= 0) {
+            endGame();
+          }
+        }
+      });
+    }
+    
+    function endGame() {
+      gameOver = true;
+      finalScoreEl.textContent = 'Счет: ' + score;
+      gameOverScreen.style.display = 'flex';
+    }
+    
+    function resetGame() {
+      lasers.forEach(laser => laser.remove());
+      asteroids.forEach(asteroid => asteroid.remove());
+      fragments.forEach(fragment => fragment.remove());
+      lasers = [];
+      asteroids = [];
+      fragments = [];
+      score = 0;
+      lives = 3;
+      updateLives();
+      scoreEl.textContent = 'Счет: ' + score;
+      spaceship.x = gameWidth / 2;
+      spaceship.y = gameHeight / 2;
+      spaceship.vx = 0;
+      spaceship.vy = 0;
+      spaceship.angle = 0;
+      lastAsteroidSpawn = 0;
+      asteroidSpawnInterval = 2000;
+      gameOver = false;
+      gameOverScreen.style.display = 'none';
+      console.log("Игра перезапущена");
+    }
+    
+    let joystickActive = false;
+    let joystickCenter = { x: 0, y: 0 };
+    let joystickVector = { x: 0, y: 0 };
+    const joystickMaxDistance = 40;
+    const joystickContainer = document.getElementById('joystickContainer');
+    const joystickKnob = document.getElementById('joystickKnob');
+    const shootButton = document.getElementById('shootButton');
+    const hyperspaceButton = document.getElementById('hyperspaceButton');
+    
+    if (!isMobile) {
+      joystickContainer.style.display = 'none';
+      document.getElementById('mobileButtons').style.display = 'none';
+    }
+    
+    function updateJoystick(touch) {
+      const dx = touch.clientX - joystickCenter.x;
+      const dy = touch.clientY - joystickCenter.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const angle = Math.atan2(dy, dx);
+      const clampedDistance = Math.min(distance, joystickMaxDistance);
+      const offsetX = clampedDistance * Math.cos(angle);
+      const offsetY = clampedDistance * Math.sin(angle);
+      joystickKnob.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+      joystickVector.x = offsetX / joystickMaxDistance;
+      joystickVector.y = offsetY / joystickMaxDistance;
+    }
+    
+    joystickContainer.addEventListener('touchstart', function(e) {
+      e.preventDefault();
+      joystickActive = true;
+      const rect = joystickContainer.getBoundingClientRect();
+      joystickCenter.x = rect.left + rect.width / 2;
+      joystickCenter.y = rect.top + rect.height / 2;
+      updateJoystick(e.touches[0]);
+    });
+    
+    joystickContainer.addEventListener('touchmove', function(e) {
+      e.preventDefault();
+      updateJoystick(e.touches[0]);
+    });
+    
+    joystickContainer.addEventListener('touchend', function(e) {
+      e.preventDefault();
+      joystickActive = false;
+      joystickVector.x = 0;
+      joystickVector.y = 0;
+      joystickKnob.style.transform = 'translate(0px, 0px)';
+    });
+    
+    shootButton.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const now = performance.now();
+      if (now - lastLaserTime > laserCooldown) {
+        createLaser();
+        lastLaserTime = now;
+      }
+    });
+    
+    shootButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      const now = performance.now();
+      if (now - lastLaserTime > laserCooldown) {
+        createLaser();
+        lastLaserTime = now;
+      }
+    });
+    
+    hyperspaceButton.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      activateHyperspace();
+    });
+    
+    hyperspaceButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      activateHyperspace();
+    });
+    
+    let lastTime = performance.now();
+    
+    function gameLoop(now) {
+      const delta = now - lastTime;
+      lastTime = now;
+    
+      if (!gameOver) {
+        updateStars(delta);
+        updateSpaceship(delta);
+        if (keys['Space'] && now - lastLaserTime > laserCooldown) {
+          createLaser();
+          lastLaserTime = now;
+        }
+        updateLasers(delta);
+        updateAsteroids(delta);
+        updateFragments(delta);
+        handleLaserCollisions();
+        handleShipCollisions();
+        scoreEl.textContent = 'Счет: ' + score;
+        if (now - lastAsteroidSpawn > asteroidSpawnInterval) {
+          createAsteroid();
+          lastAsteroidSpawn = now;
+          asteroidSpawnInterval = Math.max(300, asteroidSpawnInterval * 0.98);
+        }
+      }
+    
+      requestAnimationFrame(gameLoop);
+    }
+    
+    document.addEventListener('keydown', (e) => {
+      keys[e.code] = true;
+    });
+    document.addEventListener('keyup', (e) => {
+      keys[e.code] = false;
+    });
+    
+    restartButton.addEventListener('click', resetGame);
+    
+    updateLives();
+    createStarfield();
+    requestAnimationFrame(gameLoop);
+    
+    window.addEventListener('resize', () => {
+      gameWidth = window.innerWidth;
+      gameHeight = window.innerHeight;
+    });
+    
+    // Если приложение запущено через Telegram Mini Apps, уведомляем Telegram, что приложение готово
+    if (window.Telegram && window.Telegram.WebApp) {
+      Telegram.WebApp.ready();
+    }
+  </script>
+</body>
+</html>
